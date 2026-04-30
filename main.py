@@ -5,6 +5,7 @@ from pydantic import BaseModel
 app = FastAPI()
 
 JOKE_API_URL = "https://official-joke-api.appspot.com/random_joke"
+HTTP_TIMEOUT_SECONDS = 5.0
 
 
 class HealthResponse(BaseModel):
@@ -16,6 +17,20 @@ class JokeResponse(BaseModel):
     punchline: str
 
 
+async def fetch_joke() -> dict:
+    """Fetch a joke from the upstream API. Raises HTTPException on failure."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+        try:
+            response = await client.get(JOKE_API_URL)
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail=f"Joke API unreachable: {exc}")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="Joke API returned an error")
+
+    return response.json()
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
@@ -23,9 +38,5 @@ def health() -> HealthResponse:
 
 @app.get("/joke", response_model=JokeResponse)
 async def joke() -> JokeResponse:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(JOKE_API_URL)
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="Joke API unavailable")
-    data = response.json()
+    data = await fetch_joke()
     return JokeResponse(setup=data["setup"], punchline=data["punchline"])
