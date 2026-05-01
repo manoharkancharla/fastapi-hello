@@ -8,7 +8,7 @@ client = TestClient(app)
 
 
 @respx.mock
-def test_joke_returns_setup_and_punchline():
+def test_joke_returns_setup_and_punchline() -> None:
     respx.get(JOKE_API_URL).mock(
         return_value=httpx.Response(
             200,
@@ -23,7 +23,7 @@ def test_joke_returns_setup_and_punchline():
 
 
 @respx.mock
-def test_joke_returns_502_when_upstream_returns_error():
+def test_joke_returns_502_when_upstream_returns_error() -> None:
     respx.get(JOKE_API_URL).mock(return_value=httpx.Response(500))
 
     response = client.get("/joke")
@@ -33,7 +33,7 @@ def test_joke_returns_502_when_upstream_returns_error():
 
 
 @respx.mock
-def test_joke_returns_502_when_upstream_unreachable():
+def test_joke_returns_502_when_upstream_unreachable() -> None:
     respx.get(JOKE_API_URL).mock(side_effect=httpx.ConnectError("network down"))
 
     response = client.get("/joke")
