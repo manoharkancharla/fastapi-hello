@@ -1,6 +1,6 @@
-from typing import Any
 
 import httpx
+import structlog
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from tenacity import (
@@ -10,6 +10,8 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+
+log = structlog.get_logger()
 
 app = FastAPI()
 
@@ -31,17 +33,17 @@ class UpstreamError(Exception):
     """Raised when the upstream joke API returns a retryable error."""
 
 
-async def _get_joke_once(client: httpx.AsyncClient) -> dict[str, Any]:
-    """Single attempt — raises UpstreamError on 5xx, returns dict on 2xx."""
+async def _get_joke_once(client: httpx.AsyncClient) -> JokeResponse:
+    """Single attempt — raises UpstreamError on 5xx, returns JokeResponse on 2xx."""
     response = await client.get(JOKE_API_URL)
     if response.status_code >= 500:
         raise UpstreamError(f"Upstream returned {response.status_code}")
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Upstream returned {response.status_code}")
-    return response.json()  # type: ignore[no-any-return]
+    return JokeResponse.model_validate(response.json())
 
 
-async def fetch_joke() -> dict[str, Any]:
+async def fetch_joke() -> JokeResponse:
     """Fetch a joke with exponential backoff retry on transient failures."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
         try:
@@ -52,8 +54,36 @@ async def fetch_joke() -> dict[str, Any]:
                 reraise=False,
             ):
                 with attempt:
-                    return await _get_joke_once(client)
+                    attempt_num = attempt.retry_state.attempt_number
+                    log.info(
+                        "joke_fetch_attempt",
+                        attempt=attempt_num,
+                        max_attempts=MAX_ATTEMPTS,
+                        url=JOKE_API_URL,
+                    )
+                    try:
+                        result = await _get_joke_once(client)
+                    except (UpstreamError, httpx.RequestError) as exc:
+                        log.warning(
+                            "joke_fetch_attempt_failed",
+                            attempt=attempt_num,
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
+                        raise
+                    log.info(
+                        "joke_fetch_succeeded",
+                        attempt=attempt_num,
+                        total_attempts=attempt_num,
+                    )
+                    return result
         except RetryError as exc:
+            log.error(
+                "joke_fetch_exhausted",
+                max_attempts=MAX_ATTEMPTS,
+                final_error=str(exc.last_attempt.exception()),
+                final_error_type=type(exc.last_attempt.exception()).__name__,
+            )
             raise HTTPException(
                 status_code=502,
                 detail=f"Joke API failed after {MAX_ATTEMPTS} attempts: {exc.last_attempt.exception()}",
@@ -69,5 +99,4 @@ def health() -> HealthResponse:
 
 @app.get("/joke", response_model=JokeResponse)
 async def joke() -> JokeResponse:
-    data = await fetch_joke()
-    return JokeResponse(setup=data["setup"], punchline=data["punchline"])
+    return await fetch_joke()
