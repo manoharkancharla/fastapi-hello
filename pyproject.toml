@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
     "pandas>=3.0.3",
+    "structlog>=25.5.0",
     "tenacity>=9.1.4",
     "uvicorn[standard]>=0.46.0",
 ]
@@ -23,6 +24,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+exclude = [".virtual_documents", ".ipynb_checkpoints", "anaconda_projects"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM"]
