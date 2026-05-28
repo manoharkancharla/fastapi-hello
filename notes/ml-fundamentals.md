@@ -85,3 +85,27 @@ count — a 10-token response and a 2000-token response on the same model are no
 latency events. Standard APM dashboards will mislead you if you treat them the same way.
 
 KV cache pressure is what vLLM was built to solve (Week 17).
+
+---
+
+# Day 3 — Illustrated GPT-2 + Prefill/Decode
+
+## 1. Prefill vs decode — and why the distinction matters for monitoring
+
+**The Prefill Phase (The Sprint)**
+The model processes the input tokens all at once, computing the KV cache for the entire prompt in a single batched forward pass. Highly compute-bound — parallelizes beautifully across GPU cores (matrix multiplication heavy). Metric to watch: **TTFT (Time to First Token)**. If TTFT is spiking but generation is fast, users are likely dumping massive contexts into the prompt, or KV cache allocation is thrashing.
+
+**The Decode Phase (The Marathon)**
+The model generates the response one token at a time. Each new token requires loading the model weights and the entire KV cache from HBM to SRAM — cannot be parallelized across time. Highly memory-bandwidth bound. Metric to watch: **ITL (Inter-Token Latency) / TPOT**. If TPOT is crawling, GPUs are likely starved for memory bandwidth or the continuous batching mechanism is overloaded.
+
+A single p99 latency alert conflates two unrelated problems. TTFT spiking means prompt processing is slow — likely a compute or batching issue. ITL spiking means generation is slow — likely a memory bandwidth or KV cache pressure issue. The fix for one doesn't help the other. An on-call engineer needs both metrics, broken out.
+
+## 2. Why "tokens per second" is a misleading single metric
+
+"Tokens per second" blends the massive, parallel throughput of the prefill phase with the slow, sequential pace of the decode phase into a single meaningless average. Because processing an input prompt is orders of magnitude faster in terms of tokens/sec than generating a response, a high overall metric can easily mask a painfully sluggish user experience if the generation phase is bottlenecked.
+
+The same model on the same GPU can show 10× different tokens/sec numbers depending on batch size, output length distribution, and concurrent request count. A benchmark that says "X tokens/sec" without specifying those three things is not a benchmark — it's a marketing number.
+
+## 3. Open question going into Day 4 (Chip Huyen)
+
+How do you actually measure prefill and decode tokens/sec separately in a production system, and what are the concrete levers for improving ITL — speculative decoding, batching strategies, hardware choices?
