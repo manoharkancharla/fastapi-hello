@@ -1,4 +1,3 @@
-
 import httpx
 import structlog
 from fastapi import FastAPI, HTTPException

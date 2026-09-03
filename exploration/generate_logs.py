@@ -24,12 +24,14 @@ def generate(n_rows: int = 500) -> None:
             base_latency = 200 if endpoint == "/api/checkout" else 50
             error_penalty = 100 if status >= 500 else 0
             latency = base_latency + error_penalty + random.randint(0, 300)
-            writer.writerow({
-                "timestamp": (start + timedelta(seconds=i * 2)).isoformat(),
-                "endpoint": endpoint,
-                "status_code": status,
-                "latency_ms": latency,
-            })
+            writer.writerow(
+                {
+                    "timestamp": (start + timedelta(seconds=i * 2)).isoformat(),
+                    "endpoint": endpoint,
+                    "status_code": status,
+                    "latency_ms": latency,
+                }
+            )
 
 
 if __name__ == "__main__":

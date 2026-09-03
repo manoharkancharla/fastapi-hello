@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 notes/restart-*.md
+.ipynb_checkpoints/
+.virtual_documents/
+anaconda_projects/
+Untitled*.ipynb

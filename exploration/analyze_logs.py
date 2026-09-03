@@ -18,18 +18,22 @@ def main() -> None:
 
     # 2. Filter — only slow requests (>200ms)
     slow = df[df["latency_ms"] > 200]
-    print(f"Slow requests: {len(slow)} of {len(df)} ({len(slow)/len(df):.1%})")
+    print(f"Slow requests: {len(slow)} of {len(df)} ({len(slow) / len(df):.1%})")
     print()
 
     # 3. Group by endpoint, compute aggregates
-    by_endpoint = df.groupby("endpoint").agg(
-        count=("latency_ms", "count"),
-        mean_ms=("latency_ms", "mean"),
-        p50_ms=("latency_ms", lambda s: s.quantile(0.50)),
-        p95_ms=("latency_ms", lambda s: s.quantile(0.95)),
-        p99_ms=("latency_ms", lambda s: s.quantile(0.99)),
-        error_rate=("status_code", lambda s: (s >= 500).mean()),
-    ).round(2)
+    by_endpoint = (
+        df.groupby("endpoint")
+        .agg(
+            count=("latency_ms", "count"),
+            mean_ms=("latency_ms", "mean"),
+            p50_ms=("latency_ms", lambda s: s.quantile(0.50)),
+            p95_ms=("latency_ms", lambda s: s.quantile(0.95)),
+            p99_ms=("latency_ms", lambda s: s.quantile(0.99)),
+            error_rate=("status_code", lambda s: (s >= 500).mean()),
+        )
+        .round(2)
+    )
     print("Per-endpoint summary:")
     print(by_endpoint)
     print()

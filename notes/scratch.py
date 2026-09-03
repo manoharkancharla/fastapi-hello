@@ -4,10 +4,10 @@ import collections
 
 logs = [
     {"endpoint": "/health", "status": 200, "ms": 12},
-    {"endpoint": "/joke",   "status": 200, "ms": 340},
-    {"endpoint": "/joke",   "status": 502, "ms": 5001},
+    {"endpoint": "/joke", "status": 200, "ms": 340},
+    {"endpoint": "/joke", "status": 502, "ms": 5001},
     {"endpoint": "/health", "status": 200, "ms": 8},
-    {"endpoint": "/joke",   "status": 200, "ms": 150},
+    {"endpoint": "/joke", "status": 200, "ms": 150},
 ]
 
 # Exercise 1: (latency_ms, endpoint) for requests slower than 100ms
@@ -34,8 +34,5 @@ for log in logs:
     by_endpoint[log["endpoint"]].append(log["ms"])
 print("Latencies by endpoint:", dict(by_endpoint))
 
-avg_latency = {
-    endpoint: sum(times) / len(times)
-    for endpoint, times in by_endpoint.items()
-}
+avg_latency = {endpoint: sum(times) / len(times) for endpoint, times in by_endpoint.items()}
 print("Avg latency:", avg_latency)
