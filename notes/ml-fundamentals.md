@@ -109,3 +109,21 @@ The same model on the same GPU can show 10× different tokens/sec numbers depend
 ## 3. Open question going into Day 4 (Chip Huyen)
 
 How do you actually measure prefill and decode tokens/sec separately in a production system, and what are the concrete levers for improving ITL — speculative decoding, batching strategies, hardware choices?
+
+---
+
+# Day 5 (deferred from June) — LLM Evals
+
+Source: Eugene Yan, "Patterns for Building LLM-Based Systems & Products," Pattern 1: Evals.
+
+- **Evals are the test pyramid I already have, with the assertion loosened.** My respx-mocked failure paths in `tests/test_joke.py` pin a fixed input to an exact assertion (`route.call_count == MAX_ATTEMPTS`), which is exactly the heuristic/rule-based layer; what changes for LLMs is not the harness but that the output is non-deterministic, so the exact match degrades into a fuzzy one (BLEU/ROUGE) and then into a model-graded or human judgment when even fuzzy fails.
+
+- **The operational gap is that almost nobody has a regression signal — "no evals beyond vibes."** Yan's argument is that evals are the *starting point*, not the QA step at the end, and the SRE translation is exact: shipping prompt changes without an eval set is shipping without an SLI, so every change is unfalsifiable and every regression is discovered by users.
+
+- **Question going into Project A (Weeks 13-14):** if self-enhancement bias is real — GPT-4 favors itself ~10%, Claude-v1 ~25% — then judging a Claude-based RAG system with Claude is measuring the wrong thing, so what's the actual escape? And for RAG specifically, is the reference set pinned to *retrieved passages* or to *final answers*, since those two fail independently.
+
+---
+
+# Day 6 — First real LLM call
+
+- **First real Anthropic API call: 28 tokens in, 138 tokens out, 0.359 cents** (`claude-opus-5`, effort `low`, single non-streaming `messages.create`). Output tokens are priced 5× input ($25 vs $5 per MTok) and there were ~5× more of them, so ~96% of the cost was generation — the reverse of what pdf-summarizer will look like, where a large PDF makes input dominate and prompt caching becomes the lever.
