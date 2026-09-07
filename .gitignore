@@ -8,3 +8,4 @@ notes/restart-*.md
 anaconda_projects/
 Untitled*.ipynb
 scratch/
+.env

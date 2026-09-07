@@ -127,3 +127,25 @@ Source: Eugene Yan, "Patterns for Building LLM-Based Systems & Products," Patter
 # Day 6 — First real LLM call
 
 - **First real Anthropic API call: 28 tokens in, 138 tokens out, 0.359 cents** (`claude-opus-5`, effort `low`, single non-streaming `messages.create`). Output tokens are priced 5× input ($25 vs $5 per MTok) and there were ~5× more of them, so ~96% of the cost was generation — the reverse of what pdf-summarizer will look like, where a large PDF makes input dominate and prompt caching becomes the lever.
+
+---
+
+# Day 7 — LLM latency variance
+
+- **Same prompt, 5 runs, `claude-haiku-4-5`: latency 1067–1717 ms (mean 1542, 42% of mean).**
+  Input tokens identical at 25 every run; output tokens varied 40–50. Cost $0.000225–$0.000275
+  per call, $0.001305 for all five.
+
+- **The spread is mostly output length, not API noise.** The fastest run was also the shortest
+  output (40 tokens / 1067 ms); normalizing to ms-per-output-token tightens the range from 61%
+  to 34% (26.7–35.8 ms/tok). This is decode-phase dominance measured directly — each output
+  token is a sequential forward pass, so latency tracks how much the model says.
+
+- **Cost is deterministic on token counts; latency is not.** 25 × $1/M + 48 × $5/M = $0.000265,
+  exact to the last digit. So an SLO on LLM serving has to bucket by output length before it
+  means anything — the Day 3 claim ("P99 must be bucketed by output token count") is now
+  something I've measured rather than read. Averages across mixed output lengths compare
+  nothing to nothing.
+
+- Also: requesting `claude-haiku-4-5` returned `claude-haiku-4-5-20251001` — the alias resolves
+  to a dated build, so a latency baseline meant to hold across weeks should pin the snapshot.
