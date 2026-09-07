@@ -149,3 +149,39 @@ Source: Eugene Yan, "Patterns for Building LLM-Based Systems & Products," Patter
 
 - Also: requesting `claude-haiku-4-5` returned `claude-haiku-4-5-20251001` — the alias resolves
   to a dated build, so a latency baseline meant to hold across weeks should pin the snapshot.
+
+---
+
+# Day 8 — TTFT vs ITL vs total latency
+
+Streaming API, same prompt, 5 runs, `claude-haiku-4-5` (25 input tokens, 39–49 output):
+
+- **TTFT: 664–881 ms** (mean 765, spread 28% of mean)
+- **ITL: 8.5–12.9 ms/token** (mean 11.6, spread 38%)
+- **Total: 1206–1434 ms** (mean 1294, spread 18%)
+
+- **TTFT is ~59% of total latency, not decode.** At 48 output tokens the prefill/queue phase
+  costs more than the entire decode phase. The Day 3 framing (prefill = sprint, decode =
+  marathon) holds at long outputs and inverts at short ones — where the crossover sits is the
+  operationally useful question, and it isn't in those notes.
+
+- **Total latency was the *most* stable of the three metrics, not the least.** Predicted the
+  opposite (that output-token variation would dominate total variance). Components that vary
+  somewhat independently partially cancel when summed, so a stable aggregate can hide two
+  unstable parts — an argument for component SLIs that is stronger than the one I wrote on
+  Day 3, and for the opposite reason.
+
+- **Caveat that limits all of the above: `stream_chunks` was only 3–4 for ~46 tokens.**
+  Something on the path is coalescing SSE deltas, so "first chunk" != "first token" and ITL
+  is arithmetic on an average rather than an observed inter-token gap. Buffering moves time
+  out of decode and into TTFT, which is the exact shape of the result — so the 59/41 split
+  is not yet trustworthy.
+
+- **Open question for Day 9:** is the coalescing client-side (SDK/TLS record buffering) or
+  network-side? Test: log per-chunk arrival time and character length. Many small chunks with
+  even spacing means real per-token streaming and the split stands; few large chunks means
+  TTFT is inflated and ITL understated.
+
+- Streaming total (mean 1294 ms) came in ~250 ms under Day 7's non-streaming total
+  (mean 1542 ms), consistent with the non-streaming call buffering the full response before
+  sending — but n=5 can't establish that.
