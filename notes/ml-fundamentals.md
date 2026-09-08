@@ -185,3 +185,48 @@ Streaming API, same prompt, 5 runs, `claude-haiku-4-5` (25 input tokens, 39–49
 - Streaming total (mean 1294 ms) came in ~250 ms under Day 7's non-streaming total
   (mean 1542 ms), consistent with the non-streaming call buffering the full response before
   sending — but n=5 can't establish that.
+
+---
+
+# Day 9 — Long output: decode linearity and the buffering artifact
+
+Same script + per-chunk arrival logging, prompt forced to ~500 words, 5 runs,
+`claude-haiku-4-5` (27 input tokens, 1388–1607 output).
+
+| run | out tok | chunks | median chunk | median gap | TTFT ms | total ms | ITL ms/tok |
+|-----|---------|--------|--------------|------------|---------|----------|------------|
+| 1   | 1388    | 53     | 113 ch       | 316.2 ms   | 1369    | 17741    | 11.8       |
+| 2   | 1478    | 50     | 123 ch       | 316.5 ms   | 710     | 16259    | 10.5       |
+| 3   | 1607    | 56     | 107 ch       | 315.3 ms   | 662     | 18034    | 10.8       |
+| 4   | 1454    | 55     | 119 ch       | 317.5 ms   | 667     | 17756    | 11.8       |
+| 5   | 1520    | 648    | 9 ch         | 26.1 ms    | 692     | 17922    | 11.3       |
+
+- **The Day 8 buffering caveat is resolved, and the metrics survive it.** Runs 1–4 were
+  coalesced (~113-char chunks, median gap 316 ms — that regularity across four runs is a fixed
+  flush timer on the network path, not model behaviour); run 5 escaped it (648 chunks, 9 chars,
+  26 ms). Identical script, machine, and minute, so the coalescing is intermittent and
+  transport-side. ITL landed at 10.5–11.8 ms/token in *all five* regardless, because it is
+  derived from total decode time, not from observed gaps. TTFT was likewise unaffected
+  (662–710 coalesced vs 692 fine-grained) because `chunk_chars_min` is 3–10 — the first chunk
+  stays small even when later ones batch. Lesson: log delivery granularity as a *diagnostic*,
+  but don't derive latency SLIs from inter-chunk gaps.
+
+- **Decode is linear in output length.** ITL was 11.6 ms/token at ~48 output tokens (Day 8) and
+  11.2 ms/token at ~1490 output tokens here. 30× the output, ~3% change in per-token cost.
+  This is the assumption underneath every LLM latency SLO, and it holds.
+
+- **TTFT is independent of output length, and tracks input.** ~765 ms on Day 8 (25 input
+  tokens), ~683 ms here (27 input tokens), while output grew 30×. Prefill is a function of the
+  prompt; decode is a function of the response. They are genuinely separable metrics.
+
+- **The prefill/decode crossover is ≈ 61 output tokens.** With TTFT ≈ 680 ms and ITL ≈ 11.2
+  ms/token, decode overtakes prefill at 680/11.2 tokens. Day 8's 48-token runs sat just under
+  it (TTFT = 59% of total); today's ~1490-token runs are far past it (TTFT = 3.9%). The Day 3
+  "prefill = sprint, decode = marathon" framing is correct only above ~60 output tokens — for
+  short responses the sprint is the whole race. **This is the number to know per model/route:
+  it decides whether latency work should target the prompt or the response.**
+
+- Run 1's TTFT of 1369 ms (2× the others) is the cold start predicted on Day 7 and not seen
+  then — first call of a batch, paying DNS/TLS/connection setup.
+
+- Cost: $0.0070–$0.0081 per call, $0.0374 for all five.
