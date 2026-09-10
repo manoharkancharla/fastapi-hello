@@ -230,3 +230,72 @@ Same script + per-chunk arrival logging, prompt forced to ~500 words, 5 runs,
   then — first call of a batch, paying DNS/TLS/connection setup.
 
 - Cost: $0.0070–$0.0081 per call, $0.0374 for all five.
+
+## Cross-model comparison (haiku-4-5 vs sonnet-4-5)
+
+Same script, 5 short + 5 long runs on each model. Prices verified against
+platform.claude.com pricing page 2026-09-09: haiku-4-5 $1/$5 per MTok,
+sonnet-4-5 $3/$15. (Not $0.80/$4 — those are Haiku *3.5*'s retired rates.)
+
+| model | TTFT ms (long, excl cold) | ITL ms/tok | crossover (tok) | $/output token | $/call short | $/call long |
+|-------|---------------------------|------------|-----------------|----------------|--------------|-------------|
+| haiku-4-5  | 683  | 11.2 | ~61 | $5.02e-6  | $0.000255 | $0.00747 |
+| sonnet-4-5 | 1316 | 23.1 | ~57 | $1.508e-5 | $0.000744 | $0.01601 |
+| ratio      | 1.93x | 2.06x | ~1.0x | 3.00x | 2.92x | 2.14x |
+
+- **The crossover is model-invariant at ~60 output tokens, and that is the finding.**
+  Predicted (both by me and the plan) that a bigger model would lower the crossover
+  because decode would get disproportionately more expensive. Wrong: TTFT scaled 1.93x
+  and ITL scaled 2.06x, so their *ratio* barely moved. Model choice changes absolute
+  latency without moving the point where decode overtakes prefill. Operationally this
+  means the output-length bucketing threshold is portable across models — derive it
+  once, not per model.
+
+- **Cost per output token is exactly the price ratio (3.004x); cost per call is not
+  (2.14x).** Sonnet wrote ~1062 tokens where haiku wrote ~1489 for the identical prompt,
+  so the per-call number understates the true multiple by a third. A model that looks
+  cheaper per request may simply be less verbose — normalize by tokens before comparing,
+  or a model-swap decision gets made on the wrong number.
+
+- **Coalescing reproduces on a second model, so it is path-side, not model-side.** Exactly
+  one of five long runs escaped it on each model (haiku: 648 chunks vs ~53; sonnet: 428 vs
+  ~35). It still doesn't perturb the derived metrics: sonnet's fine-grained run gave ITL
+  23.7 against 22.3–23.5 for the four coalesced ones. Day 8's caveat is now closed on two
+  models.
+
+- Cold start appears again as run 1 of each batch (sonnet short run 1: TTFT 1787 vs
+  1256–1530 for runs 2–5). Consistent across three days now — worth discarding the first
+  run of any latency batch by default.
+
+- Open question: at 25–27 input tokens, prefill compute is negligible, so why does TTFT
+  double between models? The model-dependent part of TTFT (scheduling, weight/KV setup)
+  must scale with model size even when there is almost nothing to prefill. Network RTT is
+  model-independent and cannot explain it.
+
+- Cost: $0.0838 for all ten calls ($0.00372 short, $0.08007 long).
+
+## Cost is deterministic on tokens, latency is not — and that splits the SLO surface
+
+Every call across Days 6–9 reproduced its cost exactly from input and output token counts;
+not one needed a percentile. Latency never reproduced twice. That asymmetry is not a
+curiosity, it decides how the two get monitored.
+
+Cost belongs in budget alerts, not percentile dashboards. It is strictly additive and
+perfectly predictable given token counts, so the only thing worth alerting on is a change
+in those counts: a prompt that grew, output that stopped being bounded, a model swap that
+went out unnoticed. A cost SLO is really a token-count SLO wearing a dollar sign, and it
+fires on regressions in the *system*, not on variance in the service.
+
+Latency needs both percentiles and workload bucketing, and bucketing is the part people
+skip. A p99 over mixed traffic — chat, summarization, extraction, code gen — is dominated
+by whichever bucket happens to generate the most tokens, so the number moves when the
+traffic mix moves and tells you nothing about the service. Bucket first, then measure TTFT
+and ITL separately inside each bucket. That is the real operational tax of putting several
+workloads behind one endpoint.
+
+The crossover decides which SLI leads. Below ~60 output tokens — classification,
+extraction, routing, short chat turns — TTFT is nearly the whole request, and work to
+reduce latency belongs on the prompt and the queue. Above it, ITL x output_tokens
+dominates and the lever is output length and decode throughput. The ~60 figure held across
+a 3x price range, so it can be treated as a property of the serving architecture rather
+than of the model.
