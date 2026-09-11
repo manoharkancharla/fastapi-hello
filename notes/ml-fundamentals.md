@@ -299,3 +299,64 @@ reduce latency belongs on the prompt and the queue. Above it, ITL x output_token
 dominates and the lever is output length and decode throughput. The ~60 figure held across
 a 3x price range, so it can be treated as a property of the serving architecture rather
 than of the model.
+
+---
+
+# Day 11 — TTFT vs input length: is the model gap prefill or overhead?
+
+Question from Day 10: at ~25 input tokens sonnet-4-5's TTFT was ~2x haiku-4-5's, but prefill
+compute on 25 tokens is negligible — so what is the gap made of? Method: sweep input length
+over 4 orders of magnitude on both models, `max_tokens=16` (TTFT is measured before a second
+token exists, so output length is pure cost and pure noise), 3 runs per point,
+`cache_read_input_tokens=0` verified on every call.
+
+| actual input tok | haiku TTFT mean | sonnet TTFT mean |
+|------------------|-----------------|------------------|
+| 15               | 620 ms          | 862 ms           |
+| 2,014            | 614 ms          | 1,182 ms         |
+| 23,082           | 763 ms          | 1,430 ms         |
+| 116,776          | 1,637 ms        | 2,314 ms         |
+
+Least squares, TTFT = intercept + slope x input_tokens:
+
+| model | intercept | slope | R2 |
+|-------|-----------|-------|-----|
+| haiku-4-5  | 594 ms  | 8.88 us/tok  | 0.77 |
+| sonnet-4-5 | 1058 ms | 10.97 us/tok | 0.91 |
+| ratio      | **1.78x** | **1.24x**  |      |
+
+- **The model gap is in the intercept, not the slope — question answered.** Over the largest
+  segment (23K -> 117K) the slopes are indistinguishable: 9.33 us/tok haiku vs 9.43 us/tok
+  sonnet. Per-token input cost is essentially model-independent; fixed per-request overhead
+  is what differs by ~1.8x. So the Day 10 doubling at 25 input tokens was setup and
+  scheduling, not prefill compute — consistent with prefill on 25 tokens being ~0.2 ms.
+
+- **Caveat, and it may be the more important finding: that shared slope is probably not
+  prefill at all — it's probably upload.** 116,776 tokens at 4.15 chars/token is ~485 KB of
+  request body. Haiku's slope predicts ~1036 ms above intercept at that size; 485 KB in
+  1.036 s is ~3.7 Mbps, an ordinary home upload speed. A slope that is *identical* across
+  two different-sized models is exactly what a network-bound measurement looks like — a
+  bigger model should cost more FLOPs per token, and this one doesn't. **Test (Day 12):**
+  send the same 100K payload twice with `cache_control` set. The second call uploads the
+  same bytes but skips prefill compute. TTFT unchanged => upload dominates. TTFT drops =>
+  prefill was real. This also means my client-side TTFT is not the server's TTFT, and
+  anything I publish about TTFT-vs-input needs that stated.
+
+- **Below ~2,000 input tokens, input length is invisible.** haiku went 620 -> 614 ms from 15
+  to 2,014 tokens. The original plan's 25/500/2000 sweep would have produced a flat line and
+  no conclusion; the signal only clears the noise floor above ~20K.
+
+- **Two anomalies, recorded not smoothed.** (1) Sonnet's 15 -> 2,014 step is +321 ms =
+  160 us/tok, 17x steeper than any later segment, with tight variance at both ends, so not
+  noise — unexplained, possibly a small-request fast path. (2) Haiku's three 100K runs were
+  2046 / 1843 / 1022 ms; that third value is half the others with cache_read=0, and it is
+  what drags haiku's R2 to 0.77.
+
+- **Prefill == fixed overhead at ~67K input tokens (haiku) / ~96K (sonnet)** — the input-side
+  analogue of the ~60-output-token crossover from Day 10. Subject to the upload caveat above:
+  if the slope is network, these are properties of my connection, not the service.
+
+- Cost: $1.70 for 24 calls ($0.43 haiku, $1.28 sonnet). Estimate said $1.47 — actual ran 16%
+  over because the chars/token calibration (done on the first 8 KB) undershot at large sizes,
+  so "20,000" landed at 23,082 and "100,000" at 116,776. Calibrate on the whole payload, or
+  quote estimates as lower bounds.
