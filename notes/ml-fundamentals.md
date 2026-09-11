@@ -360,3 +360,107 @@ Least squares, TTFT = intercept + slope x input_tokens:
   over because the chars/token calibration (done on the first 8 KB) undershot at large sizes,
   so "20,000" landed at 23,082 and "100,000" at 116,776. Calibrate on the whole payload, or
   quote estimates as lower bounds.
+
+---
+
+# Day 12 — one-shot document summarization baseline
+
+First real document through the API: "Attention Is All You Need" (arXiv 1706.03762),
+15 pages, 39,510 chars after `pypdf` text extraction. One non-streaming `messages.create`
+on haiku-4-5, "summarize in 200 words", `max_tokens=1024`, 3 runs, no `cache_control`
+(`cache_read_input_tokens=0` verified on every run). Script: `scratch/pdf_summarize_baseline.py`
+(untracked — `scratch/` is gitignored, same as Days 6–11).
+
+| run | input tok | output tok | latency | cost |
+|-----|-----------|------------|---------|------|
+| 1   | 11,323    | 348        | 5,037 ms | $0.01306 |
+| 2   | 11,323    | 375        | 4,964 ms | $0.01320 |
+| 3   | 11,323    | 340        | 4,884 ms | $0.01302 |
+
+- **A realistic 15-page document is 11.3K input tokens — half of the smallest point
+  (23K) the Day 11 slope was fit on, and inside the band Day 11 called barely visible.**
+  The slope predicts 9 us x 11.3K ≈ 100 ms of input-attributable latency out of ~5,000 —
+  about 2%. Decode (~350 tok x 11.2 ms ≈ 3.9 s) is ~80%. So the TTFT-vs-input work was
+  diagnostic; it does not describe single-document summarization. It starts to matter
+  at 60+ pages, or when chunks are concatenated back into one prompt.
+
+- **The lever asymmetry: latency is output-driven, cost is input-driven.** Input is 86.7%
+  of cost ($0.0113 of $0.0131) but ~2% of latency. Output is ~13% of cost but ~80% of
+  latency. To make this cheaper, cache the document (prompt caching on the 11K prefix).
+  To make it faster, shorten the output — the document length is nearly irrelevant.
+  Reverse of Day 6 (28 in / 138 out, 96% of cost was output).
+
+- **"200 words" produced 340–375 tokens, not the ~250–300 I predicted, and that is most
+  of why latency came in at ~5 s instead of 3–4 s.** Haiku answered in markdown — headers,
+  bullets, bold — ~230 words of prose plus formatting. Output-token count, not word count,
+  is what you pay for in both time and money; a plain-prose instruction would trim it.
+  The remaining ~400 ms of the miss is unattributable without streaming (no TTFT to
+  separate from decode) — instrument limit, not a finding.
+
+- **PDF-extracted text is 3.49 chars/token, vs 4.15 on Day 11's synthetic payload.**
+  Citations, equations, and hyphen-broken line endings tokenize denser than prose. The
+  Day 11 calibration would have over-estimated this document by ~19%. Calibrate on the
+  actual corpus, not on generated filler.
+
+- Cold start: run 1 slowest but only by 73 ms over run 2, which emitted 27 more tokens.
+  Per output token 14.5 / 13.2 / 14.4 ms — no clean signal at this granularity. Weaker
+  evidence than Days 7–9; not enough to retract the discard-run-1 rule, not enough to
+  confirm it either.
+
+- Cost: $0.039 for 3 runs. Prediction ($0.012–0.015/run) held because input tokens
+  landed in range (predicted 10–13K).
+
+- **Deferred, not resolved:** the upload-vs-prefill test Day 11 scheduled for today
+  (`scratch/bytes_vs_tokens.py`, ~$0.60) is still unrun. The open question stands.
+
+---
+
+# Day 13 — prompt caching on the same document: $0.0131 -> $0.0028
+
+Same 15-page paper, same haiku-4-5, same 200-word instruction. The document block now
+carries `cache_control: {type: ephemeral}` (5-min TTL); the instruction is a separate
+uncached text block. Three calls in one process: call 1 writes the cache, calls 2–3 read it.
+Script: `scratch/pdf_summarize_baseline.py --cache` (untracked).
+
+| call | input | cache_write | cache_read | output | latency | cost |
+|------|-------|-------------|------------|--------|---------|------|
+| 1 (write) | 14 | 11,311 | 0      | 344 | 5,285 ms | $0.01587 |
+| 2 (read)  | 14 | 0      | 11,311 | 320 | 4,632 ms | $0.00275 |
+| 3 (read)  | 14 | 0      | 11,311 | 332 | 4,583 ms | $0.00281 |
+
+Day 12 uncached, same doc: 11,323 input, ~354 output, ~4,962 ms, $0.0131 per call.
+
+- **Cache hit cuts the call from $0.0131 to $0.0028 — 78.8% off.** Not 90%: reads are
+  0.1x on the document ($0.00113), but the ~330 output tokens ($0.00165) don't cache, so
+  output is now ~60% of the bill. Input's share of cost flipped from 87% (Day 12) to ~41%.
+  The Day 2 FinOps claim is now a measurement on a real document, not an assertion.
+
+- **The first call costs more, not less: $0.0159 vs $0.0131 (+21%)** — the 1.25x write
+  premium with nothing to read yet. Break-even is exactly two calls ($0.0186 cached vs
+  $0.0262 uncached); three calls are $0.0214 vs $0.0393. Caching is a bet that the same
+  prefix comes back within 5 minutes; a document summarized once is 21% worse off.
+
+- **`usage.input_tokens` dropped from 11,323 to 14.** Once caching is on, `input_tokens`
+  is only the uncached remainder; the document lives in `cache_creation_input_tokens`
+  or `cache_read_input_tokens`. A cost formula that only reads `input_tokens` would
+  report the cached calls at ~$0.0017 and the write call at ~$0.0017 too — off by 9x on
+  call 1. Four terms, always.
+
+- **Latency: cache reads are not measurably faster at this size.** Reads averaged 4,608 ms
+  vs 4,962 ms uncached (Day 12), but emitted 28 fewer output tokens on average — at
+  11.2 ms/tok that is ~310 ms of the 354 ms gap. Residual ~40 ms, consistent with the
+  Day 11 slope predicting ~100 ms of prefill on 11K tokens, under decode noise. Prediction
+  was framed as "call 2 vs call 1" (-653 ms) and that framing was wrong: call 1 is not
+  the uncached baseline, it is uncached + write (+ possible cold start; it is the slowest
+  of all seven calls on this doc). Compare reads to Day 12, matched on output length.
+  Non-streaming, so none of this is decomposable further.
+
+- **Haiku 4.5 minimum cacheable prefix is 4,096 tokens** (Opus 5 / Sonnet 5: 512). This
+  doc clears it at 11.3K; a ~5-page PDF would silently not cache — no error,
+  `cache_creation_input_tokens: 0`. pdf-summarizer needs to check that field, not assume.
+
+- Cost: $0.0214 for 3 runs. Predictions held on every cost number (call 1 $0.016 -> $0.0159;
+  reads $0.0029–0.0031 -> $0.0028, low edge because output ran ~330 not ~350).
+
+- Still deferred: `scratch/bytes_vs_tokens.py` (upload vs prefill). Today's latency result
+  is a too-small-to-discriminate version of it — 11K tokens is ~100 ms of slope either way.
